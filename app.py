@@ -7,37 +7,40 @@ import io
 import base64
 import os
 import numpy as np
+import sys
+import pathlib
+
+# Patch for YOLOv5 models trained on Windows, now running on Linux (like Render)
+if sys.platform != "win32":
+    pathlib.WindowsPath = pathlib.PosixPath
 
 # Prevent image bomb errors
 Image.MAX_IMAGE_PIXELS = None
 
 app = Flask(__name__)
-CORS(app)  # Allow frontend (e.g. Flutter, React) to access this server
+CORS(app)  # Enable CORS for frontend apps (Flutter, React, etc.)
 
-# Load your trained model - use a locally cloned YOLOv5 repository
-MODEL_PATH = 'best.pt'  # Will look for the model in the current directory
+# Load YOLOv5 model
+MODEL_PATH = 'best.pt'
 print(f"🔄 Loading model from {MODEL_PATH} ...")
 
 try:
-    # Import YOLOv5 modules from local repo
-    import sys
-    sys.path.append('./yolov5')  # Add the cloned repo to path
+    # Add YOLOv5 repo to sys.path
+    sys.path.append('./yolov5')
     from models.common import DetectMultiBackend
     from utils.torch_utils import select_device
     from utils.general import check_img_size, non_max_suppression, scale_boxes
     from utils.augmentations import letterbox
-    
-    # Initialize device and load model
-    device = select_device('')  # Use CPU by default
+
+    device = select_device('')  # CPU
     model = DetectMultiBackend(MODEL_PATH, device=device)
     model.eval()
     print(f"✅ Model loaded with classes: {model.names}")
 except Exception as e:
     print(f"❌ Error loading model: {str(e)}")
-    # Set a fallback if model can't be loaded - will be overridden if model loads later
-    model = None
+    model = None  # Fallback
 
-# Define image transformation (not needed by YOLO, but in case you use it elsewhere)
+# Just in case you ever need PIL transforms
 transform = transforms.Compose([
     transforms.Resize((640, 640)),
     transforms.ToTensor(),
@@ -45,18 +48,15 @@ transform = transforms.Compose([
 
 @app.route('/', methods=['GET'])
 def index():
-    model_status = "✅ Loaded" if model is not None else "❌ Not loaded"
-    classes = model.names if model is not None else []
     return jsonify({
         'status': '🟢 Server Running',
-        'model_status': model_status,
+        'model_status': "✅ Loaded" if model else "❌ Not loaded",
         'predict_endpoint': '/predict',
         'classes_endpoint': '/classes',
         'model_path': MODEL_PATH,
-        'classes': classes
+        'classes': model.names if model else []
     })
 
-# ✅ ORIGINAL ENDPOINT
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
@@ -65,7 +65,6 @@ def health_check():
         'model_loaded': model is not None
     })
 
-# ✅ DUPLICATED ENDPOINT FOR FLUTTER COMPATIBILITY
 @app.route('/predict/health', methods=['GET'])
 def health_check_alias():
     return health_check()
@@ -73,27 +72,20 @@ def health_check_alias():
 @app.route('/classes', methods=['GET'])
 def get_classes():
     if model is None:
-        return jsonify({
-            'error': 'Model not loaded',
-            'classes': []
-        }), 503
-    return jsonify({
-        'classes': model.names
-    })
+        return jsonify({'error': 'Model not loaded', 'classes': []}), 503
+    return jsonify({'classes': model.names})
 
-# ✅ ORIGINAL PREDICT ENDPOINT
 @app.route('/predict', methods=['POST'])
 def predict():
     if model is None:
         return jsonify({'error': 'Model not loaded'}), 503
-        
+
     try:
-        # Check if image is sent as a file
+        # Read image from request (file or base64)
         if 'image' in request.files:
             file = request.files['image']
             img_bytes = file.read()
             img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-        # Or check if it's base64
         elif request.is_json and 'image' in request.json:
             img_data = request.json['image']
             img_bytes = base64.b64decode(img_data)
@@ -101,20 +93,20 @@ def predict():
         else:
             return jsonify({'error': 'No image provided'}), 400
 
-        # Prediction using the local model
-        img_size = check_img_size(640, s=model.stride)  # Determine letterbox size
+        # Preprocess image
+        img_size = check_img_size(640, s=model.stride)
         img_array = np.array(img)
         img_processed = letterbox(img_array, img_size, stride=model.stride, auto=True)[0]
-        img_processed = img_processed.transpose((2, 0, 1))[::-1]  # BGR to RGB, to 3xHxW
+        img_processed = img_processed.transpose((2, 0, 1))[::-1]  # BGR -> RGB
         img_processed = np.ascontiguousarray(img_processed)
         img_tensor = torch.from_numpy(img_processed).float().to(device) / 255.0
-        img_tensor = img_tensor.unsqueeze(0)  # Add batch dimension
+        img_tensor = img_tensor.unsqueeze(0)
 
-        # Run inference
+        # Inference
         pred = model(img_tensor)
-        
-        # Process results
         pred = non_max_suppression(pred, conf_thres=0.25, iou_thres=0.45)
+
+        # Parse prediction
         results = []
         for i, det in enumerate(pred):
             if len(det):
@@ -126,7 +118,6 @@ def predict():
                         'xyxy': [float(x) for x in xyxy]
                     })
 
-        # If predictions are found
         if results:
             best_pred = max(results, key=lambda x: x['confidence'])
             disease = best_pred['name']
@@ -135,10 +126,9 @@ def predict():
             disease = "Healthy"
             confidence = 100.0
 
-        # Debug log (optional)
         print(f"🧪 Prediction: {disease} ({confidence}%)")
-        
-        # Treatment recommendations (customize these)
+
+        # Recommendations
         pesticide_recommendations = {
             "Apple Scab": "Use captan or myclobutanil fungicides",
             "Black Spot": "Apply neem oil or chlorothalonil",
@@ -146,7 +136,7 @@ def predict():
             "Powdery Mildew": "Apply sulfur-based fungicides",
             "Healthy": "No pesticide needed"
         }
-        
+
         fertilizer_recommendations = {
             "Apple Scab": "Use balanced NPK with calcium",
             "Black Spot": "Rose-specific fertilizer with magnesium",
@@ -154,8 +144,7 @@ def predict():
             "Powdery Mildew": "Balanced fertilizer with silica",
             "Healthy": "Standard balanced fertilizer"
         }
-        
-        # Get recommendations or use fallback
+
         pesticide = pesticide_recommendations.get(disease, "General purpose fungicide")
         fertilizer = fertilizer_recommendations.get(disease, "Balanced NPK fertilizer")
 
@@ -170,11 +159,10 @@ def predict():
         print(f"❌ Error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# ✅ DUPLICATED ENDPOINT FOR FLUTTER COMPATIBILITY
 @app.route('/predict/predict', methods=['POST'])
 def predict_alias():
-    return predict()      
+    return predict()
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=port)
