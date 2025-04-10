@@ -4,3 +4,8 @@ torch
 torchvision
 Pillow
 gdown
+pandas
+PyYAML
+tqdm
+seaborn
+matplotlib
