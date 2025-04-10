@@ -5,6 +5,7 @@ import torchvision.transforms as transforms
 from PIL import Image
 import io
 import base64
+import os
 
 # Prevent image bomb errors
 Image.MAX_IMAGE_PIXELS = None
@@ -12,12 +13,18 @@ Image.MAX_IMAGE_PIXELS = None
 app = Flask(__name__)
 CORS(app)  # Allow frontend (e.g. Flutter, React) to access this server
 
-# Load your trained model
-MODEL_PATH = 'D:/IOT/best.pt'  # Update this if needed
+# Load your trained model - use a relative path that works on Render
+MODEL_PATH = 'best.pt'  # Will look for the model in the current directory
 print(f"🔄 Loading model from {MODEL_PATH} ...")
-model = torch.hub.load('ultralytics/yolov5', 'custom', path=MODEL_PATH)
-model.eval()
-print(f"✅ Model loaded with classes: {model.names}")
+
+try:
+    model = torch.hub.load('ultralytics/yolov5', 'custom', path=MODEL_PATH, trust_repo=True)
+    model.eval()
+    print(f"✅ Model loaded with classes: {model.names}")
+except Exception as e:
+    print(f"❌ Error loading model: {str(e)}")
+    # Set a fallback if model can't be loaded - will be overridden if model loads later
+    model = None
 
 # Define image transformation (not needed by YOLO, but in case you use it elsewhere)
 transform = transforms.Compose([
@@ -27,11 +34,15 @@ transform = transforms.Compose([
 
 @app.route('/', methods=['GET'])
 def index():
+    model_status = "✅ Loaded" if model is not None else "❌ Not loaded"
+    classes = model.names if model is not None else []
     return jsonify({
         'status': '🟢 Server Running',
+        'model_status': model_status,
         'predict_endpoint': '/predict',
         'classes_endpoint': '/classes',
-        'model_path': MODEL_PATH
+        'model_path': MODEL_PATH,
+        'classes': classes
     })
 
 # ✅ ORIGINAL ENDPOINT
@@ -39,7 +50,8 @@ def index():
 def health_check():
     return jsonify({
         'status': 'ok',
-        'message': 'Server is running'
+        'message': 'Server is running',
+        'model_loaded': model is not None
     })
 
 # ✅ DUPLICATED ENDPOINT FOR FLUTTER COMPATIBILITY
@@ -49,6 +61,11 @@ def health_check_alias():
 
 @app.route('/classes', methods=['GET'])
 def get_classes():
+    if model is None:
+        return jsonify({
+            'error': 'Model not loaded',
+            'classes': []
+        }), 503
     return jsonify({
         'classes': model.names
     })
@@ -56,6 +73,9 @@ def get_classes():
 # ✅ ORIGINAL PREDICT ENDPOINT
 @app.route('/predict', methods=['POST'])
 def predict():
+    if model is None:
+        return jsonify({'error': 'Model not loaded'}), 503
+        
     try:
         # Check if image is sent as a file
         if 'image' in request.files:
@@ -126,4 +146,3 @@ def predict_alias():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
-    
