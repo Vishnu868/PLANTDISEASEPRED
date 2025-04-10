@@ -18,12 +18,13 @@ MODEL_PATH = 'best.pt'  # Will look for the model in the current directory
 print(f"🔄 Loading model from {MODEL_PATH} ...")
 
 try:
-    model = torch.hub.load('ultralytics/yolov5', 'custom', path=MODEL_PATH, trust_repo=True)
+    # Add trust_repo=True and force_reload=False to avoid rate limits
+    model = torch.hub.load('ultralytics/yolov5', 'custom', path=MODEL_PATH, trust_repo=True, force_reload=False)
     model.eval()
     print(f"✅ Model loaded with classes: {model.names}")
 except Exception as e:
     print(f"❌ Error loading model: {str(e)}")
-    # Set a fallback if model can't be loaded - will be overridden if model loads later
+    # Set a fallback if model can't be loaded
     model = None
 
 # Define image transformation (not needed by YOLO, but in case you use it elsewhere)
