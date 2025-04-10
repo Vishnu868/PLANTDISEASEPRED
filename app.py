@@ -113,16 +113,18 @@ def predict():
         results = []
         for i, det in enumerate(pred):
             if det is not None and len(det):
-                print(f"🧠 Detected {len(det)} objects")
+                print(f"🧠 Detected {len(det)} objects in image {i}")
                 det[:, :4] = scale_boxes(img_tensor.shape[2:], det[:, :4], img_array.shape).round()
                 for *xyxy, conf, cls in det:
+                    cls_name = model.names[int(cls)]
+                    print(f"🔍 Class: {cls_name}, Conf: {conf.item():.4f}")
                     results.append({
-                        'name': model.names[int(cls)],
+                        'name': cls_name,
                         'confidence': float(conf),
                         'xyxy': [float(x) for x in xyxy]
                     })
             else:
-                print("🛑 No detections in image", i)
+                print(f"🛑 No detections in image {i}")
 
         if results:
             best_pred = max(results, key=lambda x: x['confidence'])
@@ -157,7 +159,8 @@ def predict():
             'disease': disease,
             'confidence': confidence,
             'pesticide': pesticide,
-            'fertilizer': fertilizer
+            'fertilizer': fertilizer,
+            'raw_detections': str(pred)  # Debug only
         })
 
     except Exception as e:
