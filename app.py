@@ -6,6 +6,7 @@ from PIL import Image
 import io
 import base64
 import os
+import numpy as np
 
 # Prevent image bomb errors
 Image.MAX_IMAGE_PIXELS = None
@@ -13,18 +14,27 @@ Image.MAX_IMAGE_PIXELS = None
 app = Flask(__name__)
 CORS(app)  # Allow frontend (e.g. Flutter, React) to access this server
 
-# Load your trained model - use a relative path that works on Render
+# Load your trained model - use a locally cloned YOLOv5 repository
 MODEL_PATH = 'best.pt'  # Will look for the model in the current directory
 print(f"🔄 Loading model from {MODEL_PATH} ...")
 
 try:
-    # Add trust_repo=True and force_reload=False to avoid rate limits
-    model = torch.hub.load('ultralytics/yolov5', 'custom', path=MODEL_PATH, trust_repo=True, force_reload=False)
+    # Import YOLOv5 modules from local repo
+    import sys
+    sys.path.append('./yolov5')  # Add the cloned repo to path
+    from models.common import DetectMultiBackend
+    from utils.torch_utils import select_device
+    from utils.general import check_img_size, non_max_suppression, scale_boxes
+    from utils.augmentations import letterbox
+    
+    # Initialize device and load model
+    device = select_device('')  # Use CPU by default
+    model = DetectMultiBackend(MODEL_PATH, device=device)
     model.eval()
     print(f"✅ Model loaded with classes: {model.names}")
 except Exception as e:
     print(f"❌ Error loading model: {str(e)}")
-    # Set a fallback if model can't be loaded
+    # Set a fallback if model can't be loaded - will be overridden if model loads later
     model = None
 
 # Define image transformation (not needed by YOLO, but in case you use it elsewhere)
@@ -91,15 +101,36 @@ def predict():
         else:
             return jsonify({'error': 'No image provided'}), 400
 
-        # Prediction
-        results = model(img)
-        predictions = results.pandas().xyxy[0]  # Convert to DataFrame
+        # Prediction using the local model
+        img_size = check_img_size(640, s=model.stride)  # Determine letterbox size
+        img_array = np.array(img)
+        img_processed = letterbox(img_array, img_size, stride=model.stride, auto=True)[0]
+        img_processed = img_processed.transpose((2, 0, 1))[::-1]  # BGR to RGB, to 3xHxW
+        img_processed = np.ascontiguousarray(img_processed)
+        img_tensor = torch.from_numpy(img_processed).float().to(device) / 255.0
+        img_tensor = img_tensor.unsqueeze(0)  # Add batch dimension
+
+        # Run inference
+        pred = model(img_tensor)
+        
+        # Process results
+        pred = non_max_suppression(pred, conf_thres=0.25, iou_thres=0.45)
+        results = []
+        for i, det in enumerate(pred):
+            if len(det):
+                det[:, :4] = scale_boxes(img_tensor.shape[2:], det[:, :4], img_array.shape).round()
+                for *xyxy, conf, cls in det:
+                    results.append({
+                        'name': model.names[int(cls)],
+                        'confidence': float(conf),
+                        'xyxy': [float(x) for x in xyxy]
+                    })
 
         # If predictions are found
-        if len(predictions) > 0:
-            best_pred = predictions.sort_values('confidence', ascending=False).iloc[0]
+        if results:
+            best_pred = max(results, key=lambda x: x['confidence'])
             disease = best_pred['name']
-            confidence = round(float(best_pred['confidence']) * 100, 2)
+            confidence = round(best_pred['confidence'] * 100, 2)
         else:
             disease = "Healthy"
             confidence = 100.0
