@@ -23,9 +23,9 @@ CORS(app)  # Enable CORS for frontend apps (Flutter, React, etc.)
 # Load YOLOv5 model
 MODEL_PATH = 'best.pt'
 print(f"🔄 Loading model from {MODEL_PATH} ...")
+print("📁 Current directory contents:", os.listdir('.'))
 
 try:
-    # Add YOLOv5 repo to sys.path
     sys.path.append('./yolov5')
     from models.common import DetectMultiBackend
     from utils.torch_utils import select_device
@@ -37,10 +37,9 @@ try:
     model.eval()
     print(f"✅ Model loaded with classes: {model.names}")
 except Exception as e:
-    print(f"❌ Error loading model: {str(e)}")
-    model = None  # Fallback
+    print(f"❌ Failed to load model: {e}")
+    model = None
 
-# Just in case you ever need PIL transforms
 transform = transforms.Compose([
     transforms.Resize((640, 640)),
     transforms.ToTensor(),
@@ -81,7 +80,6 @@ def predict():
         return jsonify({'error': 'Model not loaded'}), 503
 
     try:
-        # Read image from request (file or base64)
         if 'image' in request.files:
             file = request.files['image']
             img_bytes = file.read()
@@ -93,23 +91,29 @@ def predict():
         else:
             return jsonify({'error': 'No image provided'}), 400
 
-        # Preprocess image
+        img.save("debug_uploaded.jpg")
+        print("🖼️ Uploaded image shape:", np.array(img).shape)
+
         img_size = check_img_size(640, s=model.stride)
         img_array = np.array(img)
         img_processed = letterbox(img_array, img_size, stride=model.stride, auto=True)[0]
+        print("📐 Letterboxed image shape:", img_processed.shape)
+        Image.fromarray(img_processed).save("letterboxed.jpg")
+
         img_processed = img_processed.transpose((2, 0, 1))[::-1]  # BGR -> RGB
         img_processed = np.ascontiguousarray(img_processed)
         img_tensor = torch.from_numpy(img_processed).float().to(device) / 255.0
         img_tensor = img_tensor.unsqueeze(0)
 
-        # Inference
         pred = model(img_tensor)
-        pred = non_max_suppression(pred, conf_thres=0.25, iou_thres=0.45)
+        pred = non_max_suppression(pred, conf_thres=0.15, iou_thres=0.45)
 
-        # Parse prediction
+        print("🎯 Prediction tensor:", pred)
+
         results = []
         for i, det in enumerate(pred):
-            if len(det):
+            if det is not None and len(det):
+                print(f"🧠 Detected {len(det)} objects")
                 det[:, :4] = scale_boxes(img_tensor.shape[2:], det[:, :4], img_array.shape).round()
                 for *xyxy, conf, cls in det:
                     results.append({
@@ -117,6 +121,8 @@ def predict():
                         'confidence': float(conf),
                         'xyxy': [float(x) for x in xyxy]
                     })
+            else:
+                print("🛑 No detections in image", i)
 
         if results:
             best_pred = max(results, key=lambda x: x['confidence'])
@@ -126,9 +132,8 @@ def predict():
             disease = "Healthy"
             confidence = 100.0
 
-        print(f"🧪 Prediction: {disease} ({confidence}%)")
+        print(f"🧪 Final Prediction: {disease} ({confidence}%)")
 
-        # Recommendations
         pesticide_recommendations = {
             "Apple Scab": "Use captan or myclobutanil fungicides",
             "Black Spot": "Apply neem oil or chlorothalonil",
