@@ -1,8 +1,18 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
+
+# Core packages
 flask
 flask-cors
+
+# PyTorch CPU version
 torch==2.1.0+cpu
 torchvision==0.16.0+cpu
+
+# TensorFlow CPU version (compatible and lightweight)
+tensorflow-cpu==2.13.0
+tensorflow-io-gcs-filesystem==0.36.0
+
+# Utilities
 numpy>=1.24.4,<2.0
 Pillow
 gdown
