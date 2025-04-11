@@ -69,9 +69,35 @@ class_names = [
 ]
 
 try:
-    # Load Keras model regardless of file extension
-    model = tf.keras.models.load_model(MODEL_PATH)
-    logger.info(f"✅ Model loaded with {len(class_names)} classes")
+    # Try multiple approaches to load the model
+    logger.info(f"Attempting to load model from {MODEL_PATH}...")
+    
+    # First try: Standard Keras model loading regardless of file extension
+    try:
+        model = tf.keras.models.load_model(MODEL_PATH)
+        logger.info(f"✅ Model loaded with {len(class_names)} classes via standard loading")
+    except Exception as e1:
+        logger.warning(f"Standard model loading failed: {str(e1)}")
+        
+        # Second try: If the file is actually a Keras model with .pt extension
+        try:
+            # Check if actual_model_path exists or use MODEL_PATH
+            actual_model_path = 'trained_model.keras' if os.path.exists('trained_model.keras') else MODEL_PATH
+            logger.info(f"Attempting to load from alternate path: {actual_model_path}")
+            model = tf.keras.models.load_model(actual_model_path)
+            logger.info(f"✅ Model loaded with {len(class_names)} classes via alternate path")
+        except Exception as e2:
+            logger.error(f"Alternate model loading failed: {str(e2)}")
+            
+            # Third try: Custom objects and compile=False
+            try:
+                model = tf.keras.models.load_model(MODEL_PATH, compile=False)
+                logger.info(f"✅ Model loaded with compile=False")
+            except Exception as e3:
+                logger.error(f"All model loading attempts failed")
+                model = None
+                raise Exception(f"Could not load model: {str(e1)}, {str(e2)}, {str(e3)}")
+            
 except Exception as e:
     logger.error(f"❌ Error loading model: {str(e)}")
     model = None
