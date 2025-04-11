@@ -146,10 +146,11 @@ try:
                         tf.config.experimental.set_memory_growth(gpu, True)
                     logger.info("Set GPU memory growth")
                 
-                # Optimize for inference
-                model = tf.function(model)
-                model = tf.keras.models.clone_model(model)
-                logger.info("Optimized model for inference")
+                # NOTE: REMOVED tf.function conversion that was causing errors
+                # Just optimize for inference by creating a clone if needed
+                if not isinstance(model, tf.keras.models.Sequential) and not isinstance(model, tf.keras.Model):
+                    model = tf.keras.models.clone_model(model)
+                    logger.info("Optimized model for inference via cloning")
                 
             except Exception as e:
                 logger.warning(f"Could not set TensorFlow optimizations: {str(e)}")
@@ -168,7 +169,7 @@ if model is not None:
         # Create a dummy input tensor with the right shape
         dummy_input = np.zeros((1, target_height, target_width, 3), dtype=np.float32)
         # Run prediction with small timeout
-        _ = model.predict(dummy_input, batch_size=1, verbose=0)
+        _ = model(dummy_input, training=False) if hasattr(model, '__call__') else model.predict(dummy_input, batch_size=1, verbose=0)
         logger.info("✓ Warmup prediction completed")
     except Exception as e:
         logger.warning(f"Warmup prediction failed: {str(e)}")
@@ -261,8 +262,14 @@ def predict_with_timeout(img_processed, timeout=30):
     
     def prediction_worker():
         try:
-            result = model.predict(img_processed, batch_size=1, verbose=0)
-            result_queue.put(("success", result))
+            # Check if the model has a __call__ method (like tf.function)
+            if hasattr(model, '__call__'):
+                result = model(img_processed, training=False).numpy()
+                result_queue.put(("success", result))
+            else:
+                # Fall back to the standard predict method
+                result = model.predict(img_processed, batch_size=1, verbose=0)
+                result_queue.put(("success", result))
         except Exception as e:
             result_queue.put(("error", e))
     
