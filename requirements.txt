@@ -1,10 +1,10 @@
-flask==2.3.3
-flask-cors==4.0.0
-pillow==10.2.0
-numpy==1.26.0
-tensorflow==2.13.0  # Try a slightly older version that might have better compatibility
-h5py==3.8.0  # Specific version to ensure compatibility
-gunicorn==21.2.0
-requests==2.31.0
-gdown==4.7.3
-packaging==23.2
+flask>=2.0.0
+flask-cors>=3.0.0
+pillow>=9.0.0
+numpy>=1.20.0
+tensorflow>=2.10.0,<2.14.0  # Setting a range to avoid compatibility issues
+h5py>=3.6.0
+gunicorn>=20.0.0
+requests>=2.25.0
+gdown>=4.5.0
+packaging>=20.0
