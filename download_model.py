@@ -8,8 +8,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # URL to your Keras model
-url = 'https://drive.google.com/uc?id=1Ny1hs9hxOsrH5fBU4kqvutfj-vlsCDk5'
-output = 'model.h5'  # Use .h5 extension for better compatibility
+url = "https://drive.google.com/uc?id=1mQHatbcqWQc0HY7r9mJa1ahosUH6AO6M"
+output = 'trained_model.h5'  # Use .h5 extension for better compatibility
 
 def download_model():
     logger.info(f"Downloading model from {url} to {output}")
