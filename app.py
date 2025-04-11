@@ -23,7 +23,7 @@ app = Flask(__name__)
 CORS(app)  # Allow frontend (e.g. Flutter, React) to access this server
 
 # Load your trained model
-MODEL_PATH = 'best.pt'  # Will look for the model in the current directory (even though it's a Keras model)
+MODEL_PATH = 'best.pt'  # Keep using best.pt as you requested
 logger.info(f"🔄 Loading model from {MODEL_PATH} ...")
 
 # Define class names for the model
@@ -292,6 +292,8 @@ def predict_alias():
     return predict()      
 
 if __name__ == '__main__':
+    # Make sure to use the PORT environment variable provided by Render
     port = int(os.environ.get("PORT", 10000))
-    print(f"🚀 Starting Flask server...")
+    print(f"🚀 Starting Flask server on port {port}...")
+    # THIS IS CRITICAL: Make sure to bind to 0.0.0.0 for Render to detect the port
     app.run(host='0.0.0.0', port=port)
