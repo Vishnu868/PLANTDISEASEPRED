@@ -7,6 +7,7 @@ import io
 import base64
 import os
 import numpy as np
+import sys
 
 # Patch for YOLOv5 models trained on Windows, now running on Linux (like Render)
 if sys.platform != "win32":
