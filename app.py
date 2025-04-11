@@ -8,6 +8,9 @@ import base64
 import os
 import numpy as np
 
+# Patch for YOLOv5 models trained on Windows, now running on Linux (like Render)
+if sys.platform != "win32":
+    pathlib.WindowsPath = pathlib.PosixPath
 # Prevent image bomb errors
 Image.MAX_IMAGE_PIXELS = None
 
