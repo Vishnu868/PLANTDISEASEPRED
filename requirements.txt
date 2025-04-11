@@ -1,24 +1,15 @@
---extra-index-url https://download.pytorch.org/whl/cpu
+# Core dependencies
+flask==2.3.3
+flask-cors==4.0.0
+pillow==10.2.0
+numpy==1.26.3
+gdown==5.1.0
+werkzeug==2.3.7
 
-# Core packages
-flask
-flask-cors
-
-# PyTorch CPU version
-torch==2.1.0+cpu
-torchvision==0.16.0+cpu
-
-# TensorFlow CPU version (compatible and lightweight)
-tensorflow-cpu==2.13.0
+# For Keras model
+tensorflow==2.15.0
 tensorflow-io-gcs-filesystem==0.36.0
 
-# Utilities
-numpy>=1.24.4,<2.0
-Pillow
-gdown
-pandas
-PyYAML
-tqdm
-seaborn
-matplotlib
-opencv-python-headless
+# For logging
+python-dateutil==2.9.0.post0
+pytz==2025.2
