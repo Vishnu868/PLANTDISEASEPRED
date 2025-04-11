@@ -6,388 +6,175 @@ from PIL import Image
 import io
 import base64
 import os
-import requests
-import time
-import threading
-from functools import wraps
-import logging
-import shutil
-from pathlib import Path
-import sys
 import numpy as np
-import cv2
-import subprocess
-import torch.multiprocessing
-
-# Set up logging
-logging.basicConfig(level=logging.INFO, 
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# Set up multiprocessing strategy
-torch.multiprocessing.set_sharing_strategy('file_system')
 
 # Prevent image bomb errors
 Image.MAX_IMAGE_PIXELS = None
 
 app = Flask(__name__)
-CORS(app)  # Allow frontend access
+CORS(app)  # Allow frontend (e.g. Flutter, React) to access this server
 
-def timeout(seconds):
-    """Decorator that adds a timeout to a function"""
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            result = [None]
-            error = [None]
-            
-            def target():
-                try:
-                    result[0] = func(*args, **kwargs)
-                except Exception as e:
-                    error[0] = e
-            
-            thread = threading.Thread(target=target)
-            thread.daemon = True
-            thread.start()
-            thread.join(seconds)
-            
-            if thread.is_alive():
-                return jsonify({
-                    'error': f'Operation timed out after {seconds} seconds. Try with a smaller image or on a more powerful server.',
-                    'status': 'timeout'
-                }), 503
-            
-            if error[0] is not None:
-                raise error[0]
-            
-            return result[0]
-        return wrapper
-    return decorator
+# Load your trained model - use a locally cloned YOLOv5 repository
+MODEL_PATH = 'best.pt'  # Will look for the model in the current directory
+print(f"🔄 Loading model from {MODEL_PATH} ...")
 
-# Model path
-MODEL_PATH = 'best.pt'
-
-# Check if model exists
-if not os.path.exists(MODEL_PATH):
-    logger.error(f"❌ Model file not found: {MODEL_PATH}")
-    if os.path.exists('project/yolov5/runs/train/exp3/weights/best.pt'):
-        MODEL_PATH = 'project/yolov5/runs/train/exp3/weights/best.pt'
-        logger.info(f"✅ Using alternative model path: {MODEL_PATH}")
-
-# Print directory contents for debugging
-logger.info(f"📁 Current directory contents: {os.listdir('.')}")
-
-# Define YOLOv5 directory
-YOLOV5_DIR = Path("yolov5")
-
-# Check if YOLOv5 directory exists, if not clone it
-if not YOLOV5_DIR.exists():
-    logger.info(f"📥 Cloning YOLOv5 repository to {YOLOV5_DIR}...")
-    os.system(f"git clone https://github.com/ultralytics/yolov5 {YOLOV5_DIR}")
-    # Optional: Checkout a specific stable version
-    os.system(f"cd {YOLOV5_DIR} && git checkout v7.0")
-
-# Add the YOLOv5 directory to Python path
-sys.path.append(str(YOLOV5_DIR))
-
-# Import YOLOv5 modules
 try:
-    logger.info("🔄 Importing YOLOv5 modules...")
-    from models.experimental import attempt_load
-    from utils.general import non_max_suppression, scale_coords
+    # Import YOLOv5 modules from local repo
+    import sys
+    sys.path.append('./yolov5')  # Add the cloned repo to path
+    from models.common import DetectMultiBackend
     from utils.torch_utils import select_device
+    from utils.general import check_img_size, non_max_suppression, scale_boxes
     from utils.augmentations import letterbox
     
-    # Load model
-    logger.info(f"🔄 Loading model from {MODEL_PATH} using local YOLOv5...")
-    device = select_device('')  # Use CPU
-    model = attempt_load(MODEL_PATH, device=device)
-    model.eval()  # Set to evaluation mode
-    
-    # Get class names
-    class_names = model.module.names if hasattr(model, 'module') else model.names
-    logger.info(f"✅ Model loaded with classes: {class_names}")
-    
+    # Initialize device and load model
+    device = select_device('')  # Use CPU by default
+    model = DetectMultiBackend(MODEL_PATH, device=device)
+    model.eval()
+    print(f"✅ Model loaded with classes: {model.names}")
 except Exception as e:
-    logger.error(f"❌ Error loading model with local YOLOv5: {str(e)}")
-    logger.info("🔄 Attempting alternative model loading with PyTorch Hub...")
-    
-    try:
-        # Try using PyTorch Hub as fallback
-        import torch.hub
-        
-        # Clear torch hub cache
-        torch_hub_dir = Path.home() / ".cache" / "torch" / "hub"
-        if torch_hub_dir.exists():
-            try:
-                logger.info(f"🧹 Clearing torch hub cache at {torch_hub_dir}")
-                shutil.rmtree(torch_hub_dir)
-            except Exception as e:
-                logger.error(f"❌ Failed to clear cache: {e}")
-        
-        model = torch.hub.load('ultralytics/yolov5', 
-                             'custom', 
-                             path=MODEL_PATH, 
-                             force_reload=True, 
-                             trust_repo=True)
-        model.eval()
-        class_names = model.names
-        logger.info(f"✅ Model loaded with PyTorch Hub, classes: {class_names}")
-    except Exception as e2:
-        logger.error(f"❌ All model loading methods failed: {str(e2)}")
-        raise
+    print(f"❌ Error loading model: {str(e)}")
+    # Set a fallback if model can't be loaded - will be overridden if model loads later
+    model = None
+
+# Define image transformation (not needed by YOLO, but in case you use it elsewhere)
+transform = transforms.Compose([
+    transforms.Resize((640, 640)),
+    transforms.ToTensor(),
+])
 
 @app.route('/', methods=['GET'])
 def index():
-    html = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Plant Disease Detector</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-            .form-container { margin-top: 20px; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
-            button { background-color: #4CAF50; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; }
-            #result { margin-top: 20px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; display: none; }
-            .loader { border: 5px solid #f3f3f3; border-top: 5px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 2s linear infinite; display: none; margin: 20px auto; }
-            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-            .image-preview { max-width: 300px; max-height: 300px; margin-top: 15px; border: 1px solid #ddd; display: none; }
-        </style>
-    </head>
-    <body>
-        <h1>Plant Disease Detector</h1>
-        <p>Upload a plant leaf image to detect diseases</p>
-        
-        <div class="form-container">
-            <form id="upload-form">
-                <input type="file" id="image-input" accept="image/*" required>
-                <button type="submit">Analyze</button>
-            </form>
-            <img id="preview" class="image-preview" />
-            <div class="loader" id="loader"></div>
-        </div>
-        
-        <div id="result"></div>
-        
-        <script>
-            // Show image preview
-            document.getElementById('image-input').addEventListener('change', function(e) {
-                const preview = document.getElementById('preview');
-                const file = e.target.files[0];
-                
-                if (file) {
-                    const reader = new FileReader();
-                    reader.onload = function(e) {
-                        preview.src = e.target.result;
-                        preview.style.display = 'block';
-                    }
-                    reader.readAsDataURL(file);
-                }
-            });
-            
-            document.getElementById('upload-form').addEventListener('submit', async function(e) {
-                e.preventDefault();
-                
-                const file = document.getElementById('image-input').files[0];
-                if (!file) {
-                    alert('Please select an image');
-                    return;
-                }
-                
-                const loader = document.getElementById('loader');
-                const result = document.getElementById('result');
-                
-                loader.style.display = 'block';
-                result.style.display = 'none';
-                
-                const formData = new FormData();
-                formData.append('image', file);
-                
-                try {
-                    const response = await fetch('/predict', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    const data = await response.json();
-                    
-                    if (response.ok) {
-                        result.innerHTML = `
-                            <h3>Analysis Results:</h3>
-                            <p><strong>Disease:</strong> ${data.disease}</p>
-                            <p><strong>Confidence:</strong> ${data.confidence}%</p>
-                            <p><strong>Recommended Pesticide:</strong> ${data.pesticide}</p>
-                            <p><strong>Recommended Fertilizer:</strong> ${data.fertilizer}</p>
-                            <p><em>Processing time: ${data.processing_time || 'N/A'}</em></p>
-                        `;
-                    } else {
-                        result.innerHTML = `<p style="color: red;">Error: ${data.error}</p>`;
-                    }
-                } catch (error) {
-                    result.innerHTML = `<p style="color: red;">Server error: ${error.message}</p>`;
-                } finally {
-                    loader.style.display = 'none';
-                    result.style.display = 'block';
-                }
-            });
-        </script>
-    </body>
-    </html>
-    """
-    return html
+    model_status = "✅ Loaded" if model is not None else "❌ Not loaded"
+    classes = model.names if model is not None else []
+    return jsonify({
+        'status': '🟢 Server Running',
+        'model_status': model_status,
+        'predict_endpoint': '/predict',
+        'classes_endpoint': '/classes',
+        'model_path': MODEL_PATH,
+        'classes': classes
+    })
 
+# ✅ ORIGINAL ENDPOINT
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
         'status': 'ok',
         'message': 'Server is running',
-        'model_loaded': model is not None,
-        'model_classes': class_names
+        'model_loaded': model is not None
     })
+
+# ✅ DUPLICATED ENDPOINT FOR FLUTTER COMPATIBILITY
+@app.route('/predict/health', methods=['GET'])
+def health_check_alias():
+    return health_check()
 
 @app.route('/classes', methods=['GET'])
 def get_classes():
+    if model is None:
+        return jsonify({
+            'error': 'Model not loaded',
+            'classes': []
+        }), 503
     return jsonify({
-        'classes': class_names
+        'classes': model.names
     })
 
+# ✅ ORIGINAL PREDICT ENDPOINT
 @app.route('/predict', methods=['POST'])
-@timeout(25)  # Set timeout to 25 seconds
 def predict():
-    try:
-        start_time = time.time()
-        logger.info("🔍 Starting prediction request...")
+    if model is None:
+        return jsonify({'error': 'Model not loaded'}), 503
         
-        # Get the image from the request
+    try:
+        # Check if image is sent as a file
         if 'image' in request.files:
             file = request.files['image']
             img_bytes = file.read()
-            logger.info(f"📸 Image received: {len(img_bytes)} bytes")
             img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+        # Or check if it's base64
         elif request.is_json and 'image' in request.json:
             img_data = request.json['image']
-            # Handle both base64 with and without data URL prefix
-            if ',' in img_data:
-                img_data = img_data.split(',', 1)[1]
             img_bytes = base64.b64decode(img_data)
-            logger.info(f"📸 Base64 image received: {len(img_bytes)} bytes")
             img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
         else:
             return jsonify({'error': 'No image provided'}), 400
+
+        # Prediction using the local model
+        img_size = check_img_size(640, s=model.stride)  # Determine letterbox size
+        img_array = np.array(img)
+        img_processed = letterbox(img_array, img_size, stride=model.stride, auto=True)[0]
+        img_processed = img_processed.transpose((2, 0, 1))[::-1]  # BGR to RGB, to 3xHxW
+        img_processed = np.ascontiguousarray(img_processed)
+        img_tensor = torch.from_numpy(img_processed).float().to(device) / 255.0
+        img_tensor = img_tensor.unsqueeze(0)  # Add batch dimension
+
+        # Run inference
+        pred = model(img_tensor)
         
-        # Check which model loading method was used and process accordingly
-        if 'utils.general' in sys.modules:
-            # Using local YOLOv5 modules
-            logger.info("Using local YOLOv5 for inference")
-            
-            # Convert PIL Image to OpenCV format
-            img_cv = np.array(img)
-            img_cv = img_cv[:, :, ::-1].copy()  # RGB to BGR
-            
-            # Preprocess the image
-            img_size = 640  # YOLOv5 input size
-            img_processed = letterbox(img_cv, img_size)[0]
-            img_processed = img_processed.transpose(2, 0, 1)  # HWC to CHW
-            img_processed = np.ascontiguousarray(img_processed)
-            img_processed = torch.from_numpy(img_processed).float()
-            img_processed /= 255.0  # Normalize
-            
-            if len(img_processed.shape) == 3:
-                img_processed = img_processed.unsqueeze(0)  # Add batch dimension
-            
-            # Run inference
-            with torch.no_grad():
-                pred = model(img_processed)[0]
-                pred = non_max_suppression(pred)
-            
-            # Process results
-            results = []
-            if len(pred[0]) > 0:
-                for *xyxy, conf, cls in pred[0]:
-                    cls_idx = int(cls.item())
+        # Process results
+        pred = non_max_suppression(pred, conf_thres=0.25, iou_thres=0.45)
+        results = []
+        for i, det in enumerate(pred):
+            if len(det):
+                det[:, :4] = scale_boxes(img_tensor.shape[2:], det[:, :4], img_array.shape).round()
+                for *xyxy, conf, cls in det:
                     results.append({
-                        'class': cls_idx,
-                        'name': class_names[cls_idx],
-                        'confidence': float(conf.item()),
-                        'box': [float(x.item()) for x in xyxy]
+                        'name': model.names[int(cls)],
+                        'confidence': float(conf),
+                        'xyxy': [float(x) for x in xyxy]
                     })
-            
-            # Find best prediction
-            if results:
-                best_pred = max(results, key=lambda x: x['confidence'])
-                disease = best_pred['name']
-                confidence = round(best_pred['confidence'] * 100, 2)
-            else:
-                disease = "Healthy"
-                confidence = 100.0
-                
+
+        # If predictions are found
+        if results:
+            best_pred = max(results, key=lambda x: x['confidence'])
+            disease = best_pred['name']
+            confidence = round(best_pred['confidence'] * 100, 2)
         else:
-            # Using PyTorch Hub model
-            logger.info("Using PyTorch Hub model for inference")
-            
-            # Resize image
-            img = img.resize((640, 640), Image.Resampling.LANCZOS)
-            
-            # Run inference with optimizations
-            with torch.no_grad():  # Disable gradient calculations
-                results = model(img, size=640)
-            
-            # Process results
-            predictions = results.pandas().xyxy[0]
-            
-            if len(predictions) > 0:
-                best_pred = predictions.sort_values('confidence', ascending=False).iloc[0]
-                disease = best_pred['name']
-                confidence = round(float(best_pred['confidence']) * 100, 2)
-            else:
-                disease = "Healthy"
-                confidence = 100.0
+            disease = "Healthy"
+            confidence = 100.0
+
+        # Debug log (optional)
+        print(f"🧪 Prediction: {disease} ({confidence}%)")
         
-        elapsed_time = time.time() - start_time
-        logger.info(f"🧪 Prediction: {disease} ({confidence}%) took {elapsed_time:.2f}s")
-
-        # Disease-specific recommendations
+        # Treatment recommendations (customize these)
         pesticide_recommendations = {
-            "Bacterial_spot": "Use copper-based bactericides like copper hydroxide or copper sulfate. Apply every 7-10 days during wet weather.",
-            "Black_rot": "Apply myclobutanil, thiophanate-methyl, or captan fungicides. Start at bud break and continue at 10-14 day intervals.",
-            "Late_Blight": "Use chlorothalonil, mancozeb, or copper-based fungicides. Apply preventatively before symptoms appear.",
-            "Powder_Mildew": "Apply sulfur, potassium bicarbonate, or neem oil. Treat at first sign of disease and repeat every 7-10 days.",
-            "Healthy": "No pesticide needed. Continue regular monitoring."
+            "Apple Scab": "Use captan or myclobutanil fungicides",
+            "Black Spot": "Apply neem oil or chlorothalonil",
+            "Tomato Late Blight": "Use copper-based fungicides",
+            "Powdery Mildew": "Apply sulfur-based fungicides",
+            "Healthy": "No pesticide needed"
         }
-
+        
         fertilizer_recommendations = {
-            "Bacterial_spot": "Low nitrogen, high phosphorus and potassium (e.g., 5-10-10). Add calcium to strengthen cell walls.",
-            "Black_rot": "Balanced NPK fertilizer (e.g., 10-10-10) with added calcium. Avoid excessive nitrogen.",
-            "Late_Blight": "Low nitrogen, high potassium fertilizer (e.g., 5-10-15). Potassium helps build disease resistance.",
-            "Powder_Mildew": "Balanced fertilizer with silicon supplements. Avoid excessive nitrogen which promotes susceptible new growth.",
-            "Healthy": "Standard balanced fertilizer appropriate for plant type. Follow recommended application rates."
+            "Apple Scab": "Use balanced NPK with calcium",
+            "Black Spot": "Rose-specific fertilizer with magnesium",
+            "Tomato Late Blight": "Low nitrogen, high potassium fertilizer",
+            "Powdery Mildew": "Balanced fertilizer with silica",
+            "Healthy": "Standard balanced fertilizer"
         }
-
-        pesticide = pesticide_recommendations.get(disease, "General purpose fungicide appropriate for the plant type")
-        fertilizer = fertilizer_recommendations.get(disease, "Balanced NPK fertilizer appropriate for the plant type")
+        
+        # Get recommendations or use fallback
+        pesticide = pesticide_recommendations.get(disease, "General purpose fungicide")
+        fertilizer = fertilizer_recommendations.get(disease, "Balanced NPK fertilizer")
 
         return jsonify({
             'disease': disease,
             'confidence': confidence,
             'pesticide': pesticide,
-            'fertilizer': fertilizer,
-            'processing_time': f"{elapsed_time:.2f}s"
+            'fertilizer': fertilizer
         })
 
     except Exception as e:
-        logger.error(f"❌ Error during prediction: {str(e)}", exc_info=True)
-        import traceback
-        traceback.print_exc()
+        print(f"❌ Error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# Add an alias for the prediction endpoint for compatibility
+# ✅ DUPLICATED ENDPOINT FOR FLUTTER COMPATIBILITY
 @app.route('/predict/predict', methods=['POST'])
 def predict_alias():
-    return predict()
+    return predict()      
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))
-    logger.info(f"🚀 Starting Flask server on port {port}...")
+    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
