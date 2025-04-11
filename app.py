@@ -25,7 +25,7 @@ CORS(app)  # Allow frontend (e.g. Flutter, React) to access this server
 # Load your trained model
 # Inside app.py, replace the model loading part with:
 
-MODEL_PATH = 'model.h5'
+MODEL_PATH = 'trained_model.h5'
 FALLBACK_PATH = 'best.pt'
 logger.info(f"🔄 Loading model from {MODEL_PATH} or fallback {FALLBACK_PATH}...")
 
