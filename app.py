@@ -22,64 +22,7 @@ Image.MAX_IMAGE_PIXELS = None
 app = Flask(__name__)
 CORS(app)  # Allow frontend (e.g. Flutter, React) to access this server
 
-# Load your trained model
-# Inside app.py, replace the model loading part with:
-
-MODEL_PATH = 'trained_model.h5'
-FALLBACK_PATH = 'best.pt'
-logger.info(f"🔄 Loading model from {MODEL_PATH} or fallback {FALLBACK_PATH}...")
-
-try:
-    # Custom loading approach for compatibility
-    def load_model_with_custom_objects():
-        model_path = MODEL_PATH if os.path.exists(MODEL_PATH) else FALLBACK_PATH
-        
-        # Try different loading strategies
-        try:
-            # Strategy 1: Standard load with compile=False
-            logger.info("Trying standard loading with compile=False...")
-            return tf.keras.models.load_model(model_path, compile=False)
-        except Exception as e1:
-            logger.warning(f"Standard loading failed: {str(e1)}")
-            
-            try:
-                # Strategy 2: Load with custom objects
-                logger.info("Trying loading with custom objects...")
-                return tf.keras.models.load_model(
-                    model_path, 
-                    custom_objects={'InputLayer': tf.keras.layers.InputLayer},
-                    compile=False
-                )
-            except Exception as e2:
-                logger.warning(f"Custom objects loading failed: {str(e2)}")
-                
-                try:
-                    # Strategy 3: Try loading the model architecture and weights separately
-                    logger.info("Trying to load model structure from JSON...")
-                    json_path = model_path.replace('.h5', '.json').replace('.keras', '.json')
-                    if os.path.exists(json_path):
-                        with open(json_path, 'r') as f:
-                            model_json = f.read()
-                        model = tf.keras.models.model_from_json(model_json)
-                        model.load_weights(model_path)
-                        return model
-                    else:
-                        raise FileNotFoundError(f"No JSON architecture file found at {json_path}")
-                except Exception as e3:
-                    # Last resort - try loading with legacy mode
-                    logger.warning(f"JSON loading failed: {str(e3)}")
-                    logger.info("Trying legacy H5 loading as last resort...")
-                    return tf.keras.models.load_model(model_path, compile=False, options=tf.saved_model.LoadOptions(experimental_io_device='/job:localhost'))
-    
-    # Try loading with our custom approach
-    model = load_model_with_custom_objects()
-    logger.info(f"✅ Model loaded successfully with {len(class_names)} classes")
-    
-except Exception as e:
-    logger.error(f"❌ All model loading attempts failed: {str(e)}")
-    model = None
-
-# Define class names for the model
+# Define class names for the model FIRST, before model loading
 class_names = [
     'Apple___Apple_scab',
     'Apple___Black_rot',
@@ -121,38 +64,69 @@ class_names = [
     'Tomato___healthy'
 ]
 
+# Consolidated model loading (removing duplicated loading attempts)
+MODEL_PATH = 'trained_model.h5'
+FALLBACK_PATH = 'best.pt'
+ALTERNATE_PATH = 'trained_model.keras'
+model = None
+
+logger.info(f"🔄 Loading model from {MODEL_PATH} or fallbacks...")
+
 try:
-    # Try multiple approaches to load the model
-    logger.info(f"Attempting to load model from {MODEL_PATH}...")
-    
-    # First try: Standard Keras model loading regardless of file extension
-    try:
-        model = tf.keras.models.load_model(MODEL_PATH)
-        logger.info(f"✅ Model loaded with {len(class_names)} classes via standard loading")
-    except Exception as e1:
-        logger.warning(f"Standard model loading failed: {str(e1)}")
-        
-        # Second try: If the file is actually a Keras model with .pt extension
+    # First try: Standard Keras model loading
+    if os.path.exists(MODEL_PATH):
         try:
-            # Check if actual_model_path exists or use MODEL_PATH
-            actual_model_path = 'trained_model.keras' if os.path.exists('trained_model.keras') else MODEL_PATH
-            logger.info(f"Attempting to load from alternate path: {actual_model_path}")
-            model = tf.keras.models.load_model(actual_model_path)
-            logger.info(f"✅ Model loaded with {len(class_names)} classes via alternate path")
-        except Exception as e2:
-            logger.error(f"Alternate model loading failed: {str(e2)}")
+            model = tf.keras.models.load_model(MODEL_PATH)
+            logger.info(f"✅ Model loaded with {len(class_names)} classes via standard loading")
+        except Exception as e1:
+            logger.warning(f"Standard model loading failed: {str(e1)}")
             
-            # Third try: Custom objects and compile=False
+            # Try with compile=False
             try:
                 model = tf.keras.models.load_model(MODEL_PATH, compile=False)
                 logger.info(f"✅ Model loaded with compile=False")
-            except Exception as e3:
-                logger.error(f"All model loading attempts failed")
-                model = None
-                raise Exception(f"Could not load model: {str(e1)}, {str(e2)}, {str(e3)}")
-            
+            except Exception as e2:
+                logger.warning(f"Loading with compile=False failed: {str(e2)}")
+    
+    # If model still not loaded, try alternate paths
+    if model is None and os.path.exists(ALTERNATE_PATH):
+        try:
+            logger.info(f"Attempting to load from alternate path: {ALTERNATE_PATH}")
+            model = tf.keras.models.load_model(ALTERNATE_PATH)
+            logger.info(f"✅ Model loaded from alternate path")
+        except Exception as e3:
+            logger.warning(f"Alternate path loading failed: {str(e3)}")
+    
+    # If still not loaded, try fallback
+    if model is None and os.path.exists(FALLBACK_PATH):
+        try:
+            logger.info(f"Attempting to load from fallback path: {FALLBACK_PATH}")
+            model = tf.keras.models.load_model(FALLBACK_PATH, compile=False)
+            logger.info(f"✅ Model loaded from fallback path")
+        except Exception as e4:
+            logger.warning(f"Fallback path loading failed: {str(e4)}")
+    
+    # Last resort - try with custom objects
+    if model is None:
+        available_paths = [p for p in [MODEL_PATH, ALTERNATE_PATH, FALLBACK_PATH] if os.path.exists(p)]
+        if available_paths:
+            try:
+                model_path = available_paths[0]
+                logger.info(f"Trying loading with custom objects from {model_path}...")
+                model = tf.keras.models.load_model(
+                    model_path, 
+                    custom_objects={'InputLayer': tf.keras.layers.InputLayer},
+                    compile=False
+                )
+                logger.info(f"✅ Model loaded with custom objects")
+            except Exception as e5:
+                logger.warning(f"Custom objects loading failed: {str(e5)}")
+                
+    if model is None:
+        logger.error("❌ All model loading attempts failed")
+        
 except Exception as e:
-    logger.error(f"❌ Error loading model: {str(e)}")
+    logger.error(f"❌ Error in model loading process: {str(e)}")
     model = None
 
 # Define image preprocessing for Keras model
