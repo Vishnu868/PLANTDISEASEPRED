@@ -13,6 +13,10 @@ from functools import wraps
 import logging
 import shutil
 from pathlib import Path
+import sys
+import numpy as np
+import cv2
+import subprocess
 import torch.multiprocessing
 
 # Set up logging
@@ -61,20 +65,6 @@ def timeout(seconds):
         return wrapper
     return decorator
 
-def clear_torch_hub_cache():
-    """Clear torch hub cache to avoid loading issues"""
-    torch_hub_dir = Path.home() / ".cache" / "torch" / "hub"
-    if torch_hub_dir.exists():
-        # Backup the ultralytics directory first if it exists
-        ultralytics_dir = torch_hub_dir / "ultralytics_yolov5_master"
-        if ultralytics_dir.exists():
-            try:
-                shutil.rmtree(ultralytics_dir)
-                logger.info(f"✅ Removed {ultralytics_dir}")
-            except Exception as e:
-                logger.error(f"❌ Failed to remove {ultralytics_dir}: {e}")
-    logger.info("🧹 Torch hub cache cleared")
-
 # Model path
 MODEL_PATH = 'best.pt'
 
@@ -88,61 +78,65 @@ if not os.path.exists(MODEL_PATH):
 # Print directory contents for debugging
 logger.info(f"📁 Current directory contents: {os.listdir('.')}")
 
-# Load model
-logger.info(f"🔄 Loading model from {MODEL_PATH} ...")
+# Define YOLOv5 directory
+YOLOV5_DIR = Path("yolov5")
 
-# Clear cache before loading
-clear_torch_hub_cache()
+# Check if YOLOv5 directory exists, if not clone it
+if not YOLOV5_DIR.exists():
+    logger.info(f"📥 Cloning YOLOv5 repository to {YOLOV5_DIR}...")
+    os.system(f"git clone https://github.com/ultralytics/yolov5 {YOLOV5_DIR}")
+    # Optional: Checkout a specific stable version
+    os.system(f"cd {YOLOV5_DIR} && git checkout v7.0")
 
+# Add the YOLOv5 directory to Python path
+sys.path.append(str(YOLOV5_DIR))
+
+# Import YOLOv5 modules
 try:
-    # Try loading the model with optimization settings
-    model = torch.hub.load('ultralytics/yolov5', 
-                         'custom', 
-                         path=MODEL_PATH, 
-                         force_reload=True, 
-                         trust_repo=True,
-                         verbose=False)  # Less verbose output
+    logger.info("🔄 Importing YOLOv5 modules...")
+    from models.experimental import attempt_load
+    from utils.general import non_max_suppression, scale_coords
+    from utils.torch_utils import select_device
+    from utils.augmentations import letterbox
     
-    # Optimize for inference
-    model.eval()
-    for param in model.parameters():
-        param.requires_grad = False
-        
-    logger.info(f"✅ Model loaded with classes: {model.names}")
+    # Load model
+    logger.info(f"🔄 Loading model from {MODEL_PATH} using local YOLOv5...")
+    device = select_device('')  # Use CPU
+    model = attempt_load(MODEL_PATH, device=device)
+    model.eval()  # Set to evaluation mode
+    
+    # Get class names
+    class_names = model.module.names if hasattr(model, 'module') else model.names
+    logger.info(f"✅ Model loaded with classes: {class_names}")
     
 except Exception as e:
-    logger.error(f"❌ Error loading model: {str(e)}")
-    # Try alternative loading method
+    logger.error(f"❌ Error loading model with local YOLOv5: {str(e)}")
+    logger.info("🔄 Attempting alternative model loading with PyTorch Hub...")
+    
     try:
-        import sys
-        from pathlib import Path
+        # Try using PyTorch Hub as fallback
+        import torch.hub
         
-        # Clone YOLOv5 repository if not exists
-        yolov5_dir = Path("yolov5_repo")
-        if not yolov5_dir.exists():
-            logger.info("📥 Cloning YOLOv5 repository...")
-            os.system(f"git clone https://github.com/ultralytics/yolov5 {yolov5_dir}")
+        # Clear torch hub cache
+        torch_hub_dir = Path.home() / ".cache" / "torch" / "hub"
+        if torch_hub_dir.exists():
+            try:
+                logger.info(f"🧹 Clearing torch hub cache at {torch_hub_dir}")
+                shutil.rmtree(torch_hub_dir)
+            except Exception as e:
+                logger.error(f"❌ Failed to clear cache: {e}")
         
-        # Add YOLOv5 directory to path
-        sys.path.append(str(yolov5_dir))
-        
-        # Load model using direct import
-        from yolov5_repo.models.experimental import attempt_load
-        from yolov5_repo.models.common import AutoShape
-        
-        device = torch.device('cpu')
-        model = attempt_load(MODEL_PATH, device=device)
-        model = AutoShape(model)
-        logger.info(f"✅ Model loaded with alternative method")
+        model = torch.hub.load('ultralytics/yolov5', 
+                             'custom', 
+                             path=MODEL_PATH, 
+                             force_reload=True, 
+                             trust_repo=True)
+        model.eval()
+        class_names = model.names
+        logger.info(f"✅ Model loaded with PyTorch Hub, classes: {class_names}")
     except Exception as e2:
-        logger.error(f"❌ Both model loading methods failed: {str(e2)}")
+        logger.error(f"❌ All model loading methods failed: {str(e2)}")
         raise
-
-# Set up image transformation
-transform = transforms.Compose([
-    transforms.Resize((640, 640)),
-    transforms.ToTensor(),
-])
 
 @app.route('/', methods=['GET'])
 def index():
@@ -250,13 +244,13 @@ def health_check():
         'status': 'ok',
         'message': 'Server is running',
         'model_loaded': model is not None,
-        'model_classes': model.names
+        'model_classes': class_names
     })
 
 @app.route('/classes', methods=['GET'])
 def get_classes():
     return jsonify({
-        'classes': model.names
+        'classes': class_names
     })
 
 @app.route('/predict', methods=['POST'])
@@ -282,26 +276,74 @@ def predict():
             img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
         else:
             return jsonify({'error': 'No image provided'}), 400
-
-        # Resize image to reduce memory usage
-        img = img.resize((640, 640), Image.Resampling.LANCZOS)
         
-        # Run inference with optimizations
-        logger.info("🧠 Running inference...")
-        with torch.no_grad():  # Disable gradient calculations
-            results = model(img, size=640)
-        
-        # Process results
-        predictions = results.pandas().xyxy[0]
-        logger.info(f"📊 Got predictions: {len(predictions)} items")
-        
-        if len(predictions) > 0:
-            best_pred = predictions.sort_values('confidence', ascending=False).iloc[0]
-            disease = best_pred['name']
-            confidence = round(float(best_pred['confidence']) * 100, 2)
+        # Check which model loading method was used and process accordingly
+        if 'utils.general' in sys.modules:
+            # Using local YOLOv5 modules
+            logger.info("Using local YOLOv5 for inference")
+            
+            # Convert PIL Image to OpenCV format
+            img_cv = np.array(img)
+            img_cv = img_cv[:, :, ::-1].copy()  # RGB to BGR
+            
+            # Preprocess the image
+            img_size = 640  # YOLOv5 input size
+            img_processed = letterbox(img_cv, img_size)[0]
+            img_processed = img_processed.transpose(2, 0, 1)  # HWC to CHW
+            img_processed = np.ascontiguousarray(img_processed)
+            img_processed = torch.from_numpy(img_processed).float()
+            img_processed /= 255.0  # Normalize
+            
+            if len(img_processed.shape) == 3:
+                img_processed = img_processed.unsqueeze(0)  # Add batch dimension
+            
+            # Run inference
+            with torch.no_grad():
+                pred = model(img_processed)[0]
+                pred = non_max_suppression(pred)
+            
+            # Process results
+            results = []
+            if len(pred[0]) > 0:
+                for *xyxy, conf, cls in pred[0]:
+                    cls_idx = int(cls.item())
+                    results.append({
+                        'class': cls_idx,
+                        'name': class_names[cls_idx],
+                        'confidence': float(conf.item()),
+                        'box': [float(x.item()) for x in xyxy]
+                    })
+            
+            # Find best prediction
+            if results:
+                best_pred = max(results, key=lambda x: x['confidence'])
+                disease = best_pred['name']
+                confidence = round(best_pred['confidence'] * 100, 2)
+            else:
+                disease = "Healthy"
+                confidence = 100.0
+                
         else:
-            disease = "Healthy"
-            confidence = 100.0
+            # Using PyTorch Hub model
+            logger.info("Using PyTorch Hub model for inference")
+            
+            # Resize image
+            img = img.resize((640, 640), Image.Resampling.LANCZOS)
+            
+            # Run inference with optimizations
+            with torch.no_grad():  # Disable gradient calculations
+                results = model(img, size=640)
+            
+            # Process results
+            predictions = results.pandas().xyxy[0]
+            
+            if len(predictions) > 0:
+                best_pred = predictions.sort_values('confidence', ascending=False).iloc[0]
+                disease = best_pred['name']
+                confidence = round(float(best_pred['confidence']) * 100, 2)
+            else:
+                disease = "Healthy"
+                confidence = 100.0
         
         elapsed_time = time.time() - start_time
         logger.info(f"🧪 Prediction: {disease} ({confidence}%) took {elapsed_time:.2f}s")
