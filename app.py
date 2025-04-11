@@ -23,24 +23,60 @@ app = Flask(__name__)
 CORS(app)  # Allow frontend (e.g. Flutter, React) to access this server
 
 # Load your trained model
-# Load your trained model
-MODEL_PATH = 'model.keras'  # Update to use the correct extension
-FALLBACK_PATH = 'best.pt'   # Fallback to the old name if needed
-logger.info(f"🔄 Loading model from {MODEL_PATH} ...")
+# Inside app.py, replace the model loading part with:
+
+MODEL_PATH = 'model.h5'
+FALLBACK_PATH = 'best.pt'
+logger.info(f"🔄 Loading model from {MODEL_PATH} or fallback {FALLBACK_PATH}...")
 
 try:
-    # First try the proper extension file
-    if os.path.exists(MODEL_PATH):
-        model = tf.keras.models.load_model(MODEL_PATH)
-        logger.info(f"✅ Model loaded from {MODEL_PATH} with {len(class_names)} classes")
-    # Try fallback path
-    elif os.path.exists(FALLBACK_PATH):
-        model = tf.keras.models.load_model(FALLBACK_PATH)
-        logger.info(f"✅ Model loaded from fallback path {FALLBACK_PATH}")
-    else:
-        raise FileNotFoundError(f"Neither {MODEL_PATH} nor {FALLBACK_PATH} found")
+    # Custom loading approach for compatibility
+    def load_model_with_custom_objects():
+        model_path = MODEL_PATH if os.path.exists(MODEL_PATH) else FALLBACK_PATH
+        
+        # Try different loading strategies
+        try:
+            # Strategy 1: Standard load with compile=False
+            logger.info("Trying standard loading with compile=False...")
+            return tf.keras.models.load_model(model_path, compile=False)
+        except Exception as e1:
+            logger.warning(f"Standard loading failed: {str(e1)}")
+            
+            try:
+                # Strategy 2: Load with custom objects
+                logger.info("Trying loading with custom objects...")
+                return tf.keras.models.load_model(
+                    model_path, 
+                    custom_objects={'InputLayer': tf.keras.layers.InputLayer},
+                    compile=False
+                )
+            except Exception as e2:
+                logger.warning(f"Custom objects loading failed: {str(e2)}")
+                
+                try:
+                    # Strategy 3: Try loading the model architecture and weights separately
+                    logger.info("Trying to load model structure from JSON...")
+                    json_path = model_path.replace('.h5', '.json').replace('.keras', '.json')
+                    if os.path.exists(json_path):
+                        with open(json_path, 'r') as f:
+                            model_json = f.read()
+                        model = tf.keras.models.model_from_json(model_json)
+                        model.load_weights(model_path)
+                        return model
+                    else:
+                        raise FileNotFoundError(f"No JSON architecture file found at {json_path}")
+                except Exception as e3:
+                    # Last resort - try loading with legacy mode
+                    logger.warning(f"JSON loading failed: {str(e3)}")
+                    logger.info("Trying legacy H5 loading as last resort...")
+                    return tf.keras.models.load_model(model_path, compile=False, options=tf.saved_model.LoadOptions(experimental_io_device='/job:localhost'))
+    
+    # Try loading with our custom approach
+    model = load_model_with_custom_objects()
+    logger.info(f"✅ Model loaded successfully with {len(class_names)} classes")
+    
 except Exception as e:
-    logger.error(f"❌ Error loading model: {str(e)}")
+    logger.error(f"❌ All model loading attempts failed: {str(e)}")
     model = None
 
 # Define class names for the model
