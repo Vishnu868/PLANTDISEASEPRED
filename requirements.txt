@@ -6,3 +6,5 @@ tensorflow==2.15.0
 gunicorn==21.2.0
 requests==2.31.0
 gdown==4.7.3
+h5py==3.10.0
+packaging==23.2
