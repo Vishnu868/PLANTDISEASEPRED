@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # URL to your Keras model (ensure this is the correct Google Drive share link)
-url = 'https://drive.google.com/uc?id=1eWnEpZ3Yxny9MaQgtjYsBTKJxWczPP9J'
+url = 'https://drive.google.com/uc?id=1Ny1hs9hxOsrH5fBU4kqvutfj-vlsCDk5'
 output = 'model.keras'  # Changed to proper extension
 
 logger.info(f"Downloading model from {url} to {output}")
