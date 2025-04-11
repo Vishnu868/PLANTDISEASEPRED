@@ -23,8 +23,25 @@ app = Flask(__name__)
 CORS(app)  # Allow frontend (e.g. Flutter, React) to access this server
 
 # Load your trained model
-MODEL_PATH = 'best.pt'  # Keep using best.pt as you requested
+# Load your trained model
+MODEL_PATH = 'model.keras'  # Update to use the correct extension
+FALLBACK_PATH = 'best.pt'   # Fallback to the old name if needed
 logger.info(f"🔄 Loading model from {MODEL_PATH} ...")
+
+try:
+    # First try the proper extension file
+    if os.path.exists(MODEL_PATH):
+        model = tf.keras.models.load_model(MODEL_PATH)
+        logger.info(f"✅ Model loaded from {MODEL_PATH} with {len(class_names)} classes")
+    # Try fallback path
+    elif os.path.exists(FALLBACK_PATH):
+        model = tf.keras.models.load_model(FALLBACK_PATH)
+        logger.info(f"✅ Model loaded from fallback path {FALLBACK_PATH}")
+    else:
+        raise FileNotFoundError(f"Neither {MODEL_PATH} nor {FALLBACK_PATH} found")
+except Exception as e:
+    logger.error(f"❌ Error loading model: {str(e)}")
+    model = None
 
 # Define class names for the model
 class_names = [
